@@ -11,7 +11,7 @@ Keeping schemas separate from ORM models is intentional:
 """
 
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List, Dict, Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -51,6 +51,8 @@ class SyncResponse(BaseModel):
 # ─────────────────────────────────────────────────────────────────────────────
 # Accounts
 # ─────────────────────────────────────────────────────────────────────────────
+class RewardRulesUpdate(BaseModel):
+    reward_rules: Dict[str, Any]
 
 class AccountSchema(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -60,6 +62,8 @@ class AccountSchema(BaseModel):
     plaid_account_id: str
     name: str
     official_name: Optional[str] = None
+    is_active: bool = True
+    reward_rules: Optional[Dict[str, Any]] = None
     mask: Optional[str] = None
     type: Optional[str] = None
     subtype: Optional[str] = None
@@ -83,6 +87,8 @@ class InstitutionSchema(BaseModel):
 # ─────────────────────────────────────────────────────────────────────────────
 # Transactions
 # ─────────────────────────────────────────────────────────────────────────────
+class TransactionUpdate(BaseModel):
+    category: str
 
 class TransactionSchema(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -91,6 +97,7 @@ class TransactionSchema(BaseModel):
     account_id: str
     plaid_transaction_id: str
     merchant_name: Optional[str] = None
+    points_earned: int = 0
     name: str
     amount: float
     iso_currency_code: Optional[str] = "USD"

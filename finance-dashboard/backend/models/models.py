@@ -24,6 +24,8 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    Column,
+    JSON,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -96,6 +98,8 @@ class Account(Base):
     current_balance: Mapped[float | None] = mapped_column(Float)
     available_balance: Mapped[float | None] = mapped_column(Float)
     iso_currency_code: Mapped[str | None] = mapped_column(String(10), default="USD")
+    is_active = Column(Boolean, default=True)
+    reward_rules = Column(JSON, default=lambda: {"base": 1.0, "categories": {}})
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now, nullable=False
     )
@@ -133,6 +137,7 @@ class Transaction(Base):
     )
     plaid_transaction_id: Mapped[str] = mapped_column(String(255), nullable=False)
     merchant_name: Mapped[str | None] = mapped_column(String(255))
+    points_earned = Column(Integer, default=0)
     name: Mapped[str] = mapped_column(String(255), nullable=False)  # Plaid's raw name
     amount: Mapped[float] = mapped_column(Float, nullable=False)
     iso_currency_code: Mapped[str | None] = mapped_column(String(10), default="USD")

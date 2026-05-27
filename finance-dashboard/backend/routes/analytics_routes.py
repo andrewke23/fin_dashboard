@@ -14,7 +14,7 @@ from sqlalchemy import func, and_
 from sqlalchemy.orm import Session
 
 from backend.db.database import get_db
-from backend.models.models import Transaction
+from backend.models.models import Transaction, Account
 from backend.schemas.schemas import (
     CategoryBreakdown,
     CategoryBreakdownResponse,
@@ -39,102 +39,61 @@ def _build_date_filter(query, start_date: Optional[str], end_date: Optional[str]
     return query
 
 
-@router.get("/spending_by_month", response_model=SpendingByMonthResponse)
-def spending_by_month(
-    months: int = Query(12, ge=1, le=60, description="Number of months to return"),
-    account_id: Optional[str] = Query(None),
-    db: Session = Depends(get_db),
-):
-    """
-    Aggregate spending by calendar month.
-
-    Uses SQLite's strftime to extract YYYY-MM from the ISO date string.
-    Only includes non-pending, positive-amount (outflow) transactions.
-    """
-    query = (
+@router.get("/spending_by_month")
+def get_spending_by_month(db: Session = Depends(get_db)):
+    """Fetch total monthly outflow, ignoring deactivated accounts."""
+    # We filter out credits (amount < 0) and only include transactions from active accounts
+    results = (
         db.query(
             func.strftime("%Y-%m", Transaction.date).label("month"),
-            func.sum(Transaction.amount).label("total"),
-            func.count(Transaction.id).label("transaction_count"),
+            func.sum(Transaction.amount).label("total")
         )
-        .filter(
-            Transaction.pending == False,  # noqa: E712
-            Transaction.amount > 0,        # outflows only
-        )
-        .group_by(func.strftime("%Y-%m", Transaction.date))
-        .order_by(func.strftime("%Y-%m", Transaction.date).desc())
-        .limit(months)
+        .join(Account)
+        .filter(Account.is_active == True)
+        .filter(Transaction.amount > 0) 
+        .group_by("month")
+        .order_by("month")
+        .all()
     )
-
-    if account_id:
-        query = query.filter(Transaction.account_id == account_id)
-
-    rows = query.all()
-
-    # Return in ascending date order for charting
-    data = [
-        MonthlySpending(
-            month=row.month,
-            total=round(row.total, 2),
-            transaction_count=row.transaction_count,
-        )
-        for row in reversed(rows)
-    ]
-
-    return SpendingByMonthResponse(data=data)
+    
+    return {"data": [{"month": r.month, "total": float(r.total or 0)} for r in results]}
 
 
-@router.get("/category_breakdown", response_model=CategoryBreakdownResponse)
-def category_breakdown(
-    start_date: Optional[str] = Query(None, description="YYYY-MM-DD"),
-    end_date: Optional[str] = Query(None, description="YYYY-MM-DD"),
-    account_id: Optional[str] = Query(None),
-    db: Session = Depends(get_db),
-):
-    """
-    Sum spending by Plaid category for the given date range.
-
-    NULL categories are grouped as 'Uncategorized'.
-    Percentages are calculated from total non-pending outflow spend.
-    """
-    base = (
-        db.query(Transaction)
-        .filter(
-            Transaction.pending == False,  # noqa: E712
-            Transaction.amount > 0,
-        )
-    )
-    base = _build_date_filter(base, start_date, end_date)
-    if account_id:
-        base = base.filter(Transaction.account_id == account_id)
-
-    rows = (
-        base.with_entities(
-            func.coalesce(Transaction.category, _DEFAULT_CATEGORY).label("category"),
+@router.get("/category_breakdown")
+def get_category_breakdown(db: Session = Depends(get_db)):
+    """Fetch spending grouped by category, ignoring deactivated accounts."""
+    # Filter for debits/outflows from active accounts only
+    results = (
+        db.query(
+            Transaction.category,
             func.sum(Transaction.amount).label("total"),
-            func.count(Transaction.id).label("transaction_count"),
+            func.count(Transaction.id).label("count")
         )
-        .group_by(func.coalesce(Transaction.category, _DEFAULT_CATEGORY))
+        .join(Account)
+        .filter(Account.is_active == True)
+        .filter(Transaction.amount > 0)
+        .group_by(Transaction.category)
         .order_by(func.sum(Transaction.amount).desc())
         .all()
     )
-
-    total_spending = sum(r.total for r in rows)
-
-    data = [
-        CategoryBreakdown(
-            category=row.category,
-            total=round(row.total, 2),
-            transaction_count=row.transaction_count,
-            percentage=round((row.total / total_spending * 100) if total_spending else 0, 1),
-        )
-        for row in rows
-    ]
-
-    return CategoryBreakdownResponse(
-        data=data,
-        total_spending=round(total_spending, 2),
-    )
+    
+    total_spending = sum(float(r.total or 0) for r in results)
+    
+    data = []
+    for r in results:
+        cat_total = float(r.total or 0)
+        percentage = (cat_total / total_spending * 100) if total_spending > 0 else 0
+        data.append({
+            "category": r.category or "UNCATEGORIZED",
+            "total": cat_total,
+            "transaction_count": r.count,
+            "percentage": round(percentage, 2)
+        })
+        
+    return {
+        "data": data,
+        "total_spending": total_spending
+    }
 
 
 @router.get("/top_merchants", response_model=TopMerchantsResponse)

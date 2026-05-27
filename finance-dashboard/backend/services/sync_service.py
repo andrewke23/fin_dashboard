@@ -193,17 +193,21 @@ def sync_transactions(db: Session, institution: Institution) -> dict:
         .filter(Account.institution_id == institution.id)
         .all()
     )
-    account_map: dict[str, str] = {a.plaid_account_id: a.id for a in accounts}
+    account_map = {a.plaid_account_id: a for a in accounts}
 
     totals = {"added": 0, "modified": 0, "removed": 0, "has_more": False}
 
     has_more = True
     while has_more:
-        request = TransactionsSyncRequest(
-            access_token=access_token,
-            cursor=cursor,
-            count=500,  # maximum allowed per page
-        )
+        # Build request dynamically to avoid passing None to strictly typed Plaid models
+        request_kwargs = {
+            "access_token": access_token,
+            "count": 500,
+        }
+        if cursor is not None:
+            request_kwargs["cursor"] = cursor
+
+        request = TransactionsSyncRequest(**request_kwargs)
 
         try:
             response = client.transactions_sync(request)
@@ -217,12 +221,43 @@ def sync_transactions(db: Session, institution: Institution) -> dict:
 
         # ── Process added / modified ───────────────────────────────────────
         for txn in response.added:
-            acct_id = account_map.get(txn.account_id)
-            if acct_id is None:
-                logger.warning("Unknown account %s — skipping transaction", txn.account_id)
+            # 1. Get the specific Account object for this transaction
+            account = account_map.get(txn.account_id)
+            if account is None:
                 continue
-            op = _upsert_transaction(db, txn, acct_id)
-            totals[op] += 1
+                
+            # 2. Extract the dynamic ruleset for this specific credit card
+            # Fallback to 1x points if no rules exist
+            rules = account.reward_rules or {"base": 1.0, "categories": {}}
+            base_multiplier = rules.get("base", 1.0)
+            category_multipliers = rules.get("categories", {})
+
+            # 3. Calculate points dynamically
+            points = 0
+            if txn.amount > 0: # Only reward points for purchases (outflow)
+                category_str = txn.personal_finance_category.primary if txn.personal_finance_category else "UNCATEGORIZED"
+                
+                # Check if this category has a special multiplier for this card. 
+                # If it doesn't, fallback to the card's base multiplier.
+                multiplier = category_multipliers.get(category_str, base_multiplier)
+                
+                # Multiply the transaction amount by the determined multiplier
+                points = int(txn.amount * multiplier)
+
+            # 4. Save to database
+            db_txn = Transaction(
+                id=txn.transaction_id,
+                plaid_transaction_id=txn.transaction_id,
+                account_id=account.id, # Use the ID from the account object
+                amount=txn.amount,
+                date=txn.date,
+                name=txn.name,
+                merchant_name=txn.merchant_name,
+                pending=txn.pending,
+                category=txn.personal_finance_category.primary if txn.personal_finance_category else None,
+                points_earned=points # Save the dynamically calculated points!
+            )
+            db.add(db_txn)
 
         for txn in response.modified:
             acct_id = account_map.get(txn.account_id)
