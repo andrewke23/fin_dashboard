@@ -4,14 +4,16 @@ export interface Account {
     plaid_account_id: string;
     name: string;
     mask?: string;
-    is_active: boolean;
-    reward_rules?: {
-        base: number;
-        categories: Record<string, number>;
-      };
     subtype?: string;
     current_balance: number;
     available_balance?: number;
+    is_active: boolean;
+    // UPGRADED: Now it is an array of ruleset objects!
+    reward_rules?: {
+      effective_date: string;
+      base: number;
+      categories: Record<string, number>;
+    }[];
   }
   
   export interface Institution {

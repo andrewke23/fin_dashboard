@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from backend.db.database import get_db
-from backend.models.models import Account, Institution, SyncState
+from backend.models.models import Account, Institution, SyncState, Transaction
 from backend.schemas.schemas import AccountSchema, InstitutionSchema
 from backend.schemas.schemas import RewardRulesUpdate
 
@@ -85,13 +85,43 @@ def update_account_rules(
     update_data: RewardRulesUpdate,
     db: Session = Depends(get_db)
 ):
-    """Update the dynamic points multiplier rules for a specific account."""
+    """Update time-based point multiplier rules and retroactively apply them."""
     acct = db.query(Account).filter(Account.id == account_id).first()
     if not acct:
         raise HTTPException(status_code=404, detail="Account not found")
     
-    # Save the updated JSON ruleset
-    acct.reward_rules = update_data.reward_rules
+    # 1. Save the new array of rulesets to the Account
+    # We use model_dump() to convert the Pydantic objects into standard dictionaries for JSON saving
+    acct.reward_rules = [rule.model_dump() for rule in update_data.reward_rules]
+    
+    # 2. Sort rules newest to oldest
+    sorted_rules = sorted(acct.reward_rules, key=lambda x: x.get("effective_date", "1970-01-01"), reverse=True)
+
+    # 3. Retroactively recalculate all historical transactions
+    transactions = db.query(Transaction).filter(Transaction.account_id == account_id).all()
+    
+    for txn in transactions:
+        if txn.amount > 0:
+            txn_date_str = txn.date.isoformat() if hasattr(txn.date, 'isoformat') else str(txn.date)
+            
+            # Find the active rule for this specific transaction's date
+            active_rule = sorted_rules[-1] if sorted_rules else {"base": 1.0, "categories": {}}
+            for rule in sorted_rules:
+                if rule.get("effective_date", "1970-01-01") <= txn_date_str:
+                    active_rule = rule
+                    break
+                    
+            base_multiplier = active_rule.get("base", 1.0)
+            category_multipliers = active_rule.get("categories", {})
+            
+            cat_str = txn.category if txn.category else "UNCATEGORIZED"
+            multiplier = category_multipliers.get(cat_str, base_multiplier)
+            
+            txn.points_earned = int(txn.amount * multiplier)
+        else:
+            txn.points_earned = 0
+
+    # 4. Commit all recalculations instantly
     db.commit()
     db.refresh(acct)
     

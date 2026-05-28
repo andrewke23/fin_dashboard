@@ -51,8 +51,15 @@ class SyncResponse(BaseModel):
 # ─────────────────────────────────────────────────────────────────────────────
 # Accounts
 # ─────────────────────────────────────────────────────────────────────────────
+# 1. Define what a single time period looks like
+class RewardRulePeriod(BaseModel):
+    effective_date: str  # Format: "YYYY-MM-DD"
+    base: float
+    categories: Dict[str, float]
+
+# 2. Update the update schema to expect a list of periods
 class RewardRulesUpdate(BaseModel):
-    reward_rules: Dict[str, Any]
+    reward_rules: List[RewardRulePeriod]
 
 class AccountSchema(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -63,7 +70,7 @@ class AccountSchema(BaseModel):
     name: str
     official_name: Optional[str] = None
     is_active: bool = True
-    reward_rules: Optional[Dict[str, Any]] = None
+    reward_rules: Optional[List[Dict[str, Any]]] = None
     mask: Optional[str] = None
     type: Optional[str] = None
     subtype: Optional[str] = None

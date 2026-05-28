@@ -99,7 +99,10 @@ class Account(Base):
     available_balance: Mapped[float | None] = mapped_column(Float)
     iso_currency_code: Mapped[str | None] = mapped_column(String(10), default="USD")
     is_active = Column(Boolean, default=True)
-    reward_rules = Column(JSON, default=lambda: {"base": 1.0, "categories": {}})
+    reward_rules = Column(
+        JSON, 
+        default=lambda: [{"effective_date": "1970-01-01", "base": 1.0, "categories": {}}]
+    )    
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now, nullable=False
     )

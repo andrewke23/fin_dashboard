@@ -187,3 +187,36 @@ def accounts_summary(
             for r in rows
         ]
     }
+
+@router.get("/points_by_card")
+def get_points_by_card(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
+    """Fetch total credit card points earned per card with optional date filters."""
+    # Explicitly join Account and Transaction to prevent 0-point bugs
+    query = db.query(
+        Account.name,
+        Account.mask,
+        func.sum(Transaction.points_earned).label("total_points")
+    ).join(Transaction, Account.id == Transaction.account_id)
+    
+    if start_date:
+        query = query.filter(Transaction.date >= start_date)
+    if end_date:
+        query = query.filter(Transaction.date <= end_date)
+        
+    results = query.filter(Account.is_active == True).group_by(Account.id).all()
+                   
+    data = []
+    for r in results:
+        # Only include cards that actually earned points in this time window
+        if r.total_points and r.total_points > 0:
+            card_name = f"{r.name} (..{r.mask})" if r.mask else r.name
+            data.append({"card": card_name, "points": int(r.total_points)})
+            
+    # Sort the highest earning cards to the top
+    data.sort(key=lambda x: x["points"], reverse=True)
+    
+    return {"data": data}

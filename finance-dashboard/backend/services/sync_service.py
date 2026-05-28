@@ -219,43 +219,51 @@ def sync_transactions(db: Session, institution: Institution) -> dict:
             )
             raise
 
-        # ── Process added / modified ───────────────────────────────────────
         for txn in response.added:
-            # 1. Get the specific Account object for this transaction
             account = account_map.get(txn.account_id)
             if account is None:
                 continue
                 
-            # 2. Extract the dynamic ruleset for this specific credit card
-            # Fallback to 1x points if no rules exist
-            rules = account.reward_rules or {"base": 1.0, "categories": {}}
-            base_multiplier = rules.get("base", 1.0)
-            category_multipliers = rules.get("categories", {})
+            # --- TIME-TRAVEL POINT CALCULATION ENGINE ---
+            # 1. Extract rules array, fallback to default genesis rule
+            rules_array = account.reward_rules or [{"effective_date": "1970-01-01", "base": 1.0, "categories": {}}]
+            
+            # 2. Sort rules newest to oldest (descending date)
+            sorted_rules = sorted(rules_array, key=lambda x: x.get("effective_date", "1970-01-01"), reverse=True)
+            
+            # 3. Find the active rule for this specific transaction date
+            txn_date_str = txn.date.isoformat() if hasattr(txn.date, 'isoformat') else str(txn.date)
+            active_rule = sorted_rules[-1] # Fallback to oldest rule by default
+            
+            for rule in sorted_rules:
+                # The moment we find a rule that started BEFORE or ON the transaction date, we lock it in
+                if rule.get("effective_date", "1970-01-01") <= txn_date_str:
+                    active_rule = rule
+                    break
 
-            # 3. Calculate points dynamically
+            base_multiplier = active_rule.get("base", 1.0)
+            category_multipliers = active_rule.get("categories", {})
+
+            # 4. Calculate points
             points = 0
-            if txn.amount > 0: # Only reward points for purchases (outflow)
+            if txn.amount > 0:
                 category_str = txn.personal_finance_category.primary if txn.personal_finance_category else "UNCATEGORIZED"
-                
-                # Check if this category has a special multiplier for this card. 
-                # If it doesn't, fallback to the card's base multiplier.
                 multiplier = category_multipliers.get(category_str, base_multiplier)
-                
-                # Multiply the transaction amount by the determined multiplier
                 points = int(txn.amount * multiplier)
+            # ----------------------------------------------
 
-            # 4. Save to database
+            # 5. Save to database
             db_txn = Transaction(
                 id=txn.transaction_id,
-                plaid_transaction_id=txn.transaction_id,
-                account_id=account.id, # Use the ID from the account object
+                plaid_transaction_id=txn.transaction_id, # Keeping our fix from earlier!
+                account_id=account.id, 
                 amount=txn.amount,
                 date=txn.date,
                 name=txn.name,
                 merchant_name=txn.merchant_name,
                 pending=txn.pending,
                 category=txn.personal_finance_category.primary if txn.personal_finance_category else None,
-                points_earned=points # Save the dynamically calculated points!
+                points_earned=points # Save the time-travel calculated points!
             )
             db.add(db_txn)
 
